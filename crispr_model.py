@@ -2,7 +2,6 @@
 ============================================================
   CRISPR Off-Target Prediction Model
   Architecture: CNN + BiLSTM Hybrid
-  Author: [Your Name]
 
   Overview:
     This module implements a deep learning model for predicting

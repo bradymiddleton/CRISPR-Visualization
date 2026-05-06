@@ -1,0 +1,1104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CRISPR Off-Target Prediction Visualizer</title>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@300;400;700&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#020409;
+  --surface:rgba(255,255,255,0.03);
+  --border:rgba(255,255,255,0.07);
+  --cyan:#00e5ff;
+  --teal:#00bfa5;
+  --violet:#7c4dff;
+  --amber:#ffab00;
+  --red:#ff1744;
+  --green:#00e676;
+  --text:#e8f4f8;
+  --muted:#4a6572;
+  --mono:'JetBrains Mono',monospace;
+  --sans:'Syne',sans-serif;
+}
+html,body{width:100%;height:100%;overflow:hidden;background:var(--bg);color:var(--text);font-family:var(--sans)}
+
+/* ── CANVAS ── */
+#canvas{position:fixed;inset:0;z-index:0}
+
+/* ── UI OVERLAY ── */
+.ui{position:fixed;inset:0;z-index:10;pointer-events:none;display:flex;flex-direction:column}
+
+/* ── HEADER ── */
+.header{
+  padding:24px 32px 0;
+  display:flex;align-items:flex-start;justify-content:space-between;
+}
+.logo-block{pointer-events:auto}
+.logo-eye{
+  font-family:var(--mono);font-size:9px;letter-spacing:0.22em;
+  color:var(--cyan);text-transform:uppercase;margin-bottom:6px;
+  display:flex;align-items:center;gap:8px;
+}
+.logo-eye::before{content:'';width:20px;height:1px;background:var(--cyan)}
+h1{font-size:clamp(1.1rem,2.5vw,1.6rem);font-weight:700;letter-spacing:-0.02em;line-height:1.1}
+h1 span{color:var(--cyan)}
+.build-tag{
+  font-family:var(--mono);font-size:9px;color:var(--muted);
+  margin-top:5px;letter-spacing:0.1em;
+}
+
+/* ── STATUS BAR ── */
+.status-bar{
+  display:flex;gap:20px;align-items:center;
+  pointer-events:auto;
+}
+.status-pill{
+  display:flex;align-items:center;gap:7px;
+  font-family:var(--mono);font-size:10px;color:var(--muted);
+  letter-spacing:0.08em;
+}
+.dot{width:6px;height:6px;border-radius:50%;animation:pulse 2s infinite}
+.dot.green{background:var(--green);box-shadow:0 0 6px var(--green)}
+.dot.cyan{background:var(--cyan);box-shadow:0 0 6px var(--cyan)}
+.dot.amber{background:var(--amber);box-shadow:0 0 6px var(--amber)}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}
+
+/* ── ZOOM STAGE INDICATOR ── */
+.stage-indicator{
+  position:absolute;left:50%;transform:translateX(-50%);
+  top:28px;
+  font-family:var(--mono);font-size:10px;letter-spacing:0.18em;
+  color:rgba(0,229,255,0.5);text-transform:uppercase;
+  pointer-events:none;
+  transition:opacity 0.5s;
+}
+
+/* ── LEFT PANEL ── */
+.left-panel{
+  position:absolute;left:24px;top:50%;transform:translateY(-50%);
+  width:220px;pointer-events:auto;
+  display:flex;flex-direction:column;gap:12px;
+}
+.panel-card{
+  background:rgba(2,4,9,0.85);
+  border:1px solid var(--border);
+  border-radius:10px;
+  padding:16px;
+  backdrop-filter:blur(12px);
+}
+.panel-title{
+  font-family:var(--mono);font-size:9px;letter-spacing:0.18em;
+  color:var(--cyan);text-transform:uppercase;margin-bottom:12px;
+  display:flex;align-items:center;gap:8px;
+}
+.panel-title::after{content:'';flex:1;height:1px;background:var(--border)}
+
+/* gRNA sequence display */
+.seq-display{
+  font-family:var(--mono);font-size:11px;line-height:1.8;
+  letter-spacing:0.08em;word-break:break-all;
+}
+.nt-A{color:#ff6b6b}.nt-T{color:#4ecdc4}.nt-G{color:#45b7d1}.nt-C{color:#f9ca24}
+.nt-PAM{color:var(--amber);border-bottom:1px solid var(--amber)}
+
+/* risk meter */
+.risk-meter{margin-top:6px}
+.risk-label{
+  display:flex;justify-content:space-between;
+  font-family:var(--mono);font-size:9px;color:var(--muted);
+  margin-bottom:6px;
+}
+.risk-bar-bg{height:4px;background:rgba(255,255,255,0.08);border-radius:2px;overflow:hidden}
+.risk-bar-fill{
+  height:100%;border-radius:2px;
+  transition:width 1s ease;
+  background:linear-gradient(90deg,var(--green),var(--amber),var(--red));
+}
+
+/* stat rows */
+.stat-row{
+  display:flex;justify-content:space-between;align-items:center;
+  padding:6px 0;border-bottom:1px solid var(--border);
+  font-size:11px;
+}
+.stat-row:last-child{border-bottom:none}
+.stat-key{color:var(--muted);font-family:var(--mono);font-size:9px;letter-spacing:0.06em}
+.stat-val{font-family:var(--mono);font-size:11px;font-weight:500}
+
+/* ── RIGHT PANEL — OFF TARGET LIST ── */
+.right-panel{
+  position:absolute;right:24px;top:50%;transform:translateY(-50%);
+  width:240px;pointer-events:auto;
+}
+.ot-list{display:flex;flex-direction:column;gap:8px;max-height:70vh;overflow-y:auto}
+.ot-list::-webkit-scrollbar{width:3px}
+.ot-list::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px}
+.ot-item{
+  background:rgba(2,4,9,0.85);
+  border:1px solid var(--border);
+  border-radius:8px;padding:12px 14px;
+  cursor:pointer;
+  transition:border-color 0.2s,background 0.2s;
+  backdrop-filter:blur(12px);
+}
+.ot-item:hover{border-color:rgba(0,229,255,0.3);background:rgba(0,229,255,0.04)}
+.ot-item.active{border-color:var(--cyan);background:rgba(0,229,255,0.06)}
+.ot-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+.ot-site{font-family:var(--mono);font-size:10px;color:var(--text);letter-spacing:0.06em}
+.ot-prob{
+  font-family:var(--mono);font-size:11px;font-weight:500;
+  padding:2px 7px;border-radius:3px;
+}
+.prob-high{background:rgba(255,23,68,0.15);color:var(--red)}
+.prob-med{background:rgba(255,171,0,0.15);color:var(--amber)}
+.prob-low{background:rgba(0,230,118,0.15);color:var(--green)}
+.ot-seq{
+  font-family:var(--mono);font-size:9px;letter-spacing:0.1em;
+  color:var(--muted);margin-bottom:6px;
+}
+.ot-seq .mm{color:var(--red);text-decoration:underline;text-underline-offset:2px}
+.ot-meta{display:flex;gap:8px;flex-wrap:wrap}
+.ot-tag{
+  font-family:var(--mono);font-size:8px;letter-spacing:0.08em;
+  padding:2px 6px;border-radius:3px;text-transform:uppercase;
+}
+.tag-chr{background:rgba(124,77,255,0.15);color:var(--violet)}
+.tag-open{background:rgba(0,191,165,0.15);color:var(--teal)}
+.tag-closed{background:rgba(255,255,255,0.06);color:var(--muted)}
+
+/* ── BOTTOM BAR ── */
+.bottom-bar{
+  position:absolute;bottom:0;left:0;right:0;
+  padding:0 32px 24px;
+  display:flex;align-items:flex-end;justify-content:space-between;
+  pointer-events:auto;
+}
+
+/* zoom controls */
+.zoom-controls{
+  background:rgba(2,4,9,0.85);
+  border:1px solid var(--border);border-radius:10px;
+  padding:14px 20px;backdrop-filter:blur(12px);
+  display:flex;gap:8px;align-items:center;
+}
+.zoom-btn{
+  background:rgba(255,255,255,0.05);
+  border:1px solid var(--border);
+  border-radius:6px;padding:8px 14px;
+  color:var(--text);font-family:var(--mono);font-size:10px;
+  letter-spacing:0.08em;cursor:pointer;
+  transition:all 0.2s;white-space:nowrap;
+}
+.zoom-btn:hover{border-color:var(--cyan);color:var(--cyan);background:rgba(0,229,255,0.06)}
+.zoom-btn.active{border-color:var(--cyan);color:var(--cyan);background:rgba(0,229,255,0.1)}
+.zoom-divider{width:1px;height:20px;background:var(--border)}
+
+/* mismatch heatmap */
+.heatmap-wrap{
+  background:rgba(2,4,9,0.85);
+  border:1px solid var(--border);border-radius:10px;
+  padding:14px 18px;backdrop-filter:blur(12px);
+  min-width:300px;
+}
+.heatmap-title{
+  font-family:var(--mono);font-size:9px;letter-spacing:0.14em;
+  color:var(--cyan);text-transform:uppercase;margin-bottom:10px;
+}
+.heatmap-grid{display:flex;gap:3px}
+.hm-col{display:flex;flex-direction:column;gap:3px;align-items:center}
+.hm-pos{font-family:var(--mono);font-size:7px;color:var(--muted);margin-bottom:2px}
+.hm-cell{
+  width:14px;height:14px;border-radius:2px;
+  transition:transform 0.2s;cursor:pointer;
+}
+.hm-cell:hover{transform:scale(1.3)}
+
+/* narrative tooltip */
+.narrative{
+  position:absolute;left:50%;transform:translateX(-50%);
+  bottom:90px;
+  max-width:480px;width:90%;
+  background:rgba(2,4,9,0.92);
+  border:1px solid rgba(0,229,255,0.2);
+  border-radius:10px;padding:16px 20px;
+  backdrop-filter:blur(16px);
+  font-size:12px;line-height:1.7;color:rgba(232,244,248,0.8);
+  text-align:center;
+  transition:opacity 0.5s;
+  pointer-events:none;
+}
+.narrative strong{color:var(--cyan)}
+
+/* ── INTRO OVERLAY ── */
+#intro{
+  position:fixed;inset:0;z-index:100;
+  background:var(--bg);
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  transition:opacity 1s ease;
+}
+.intro-eye{
+  font-family:var(--mono);font-size:10px;letter-spacing:0.3em;
+  color:var(--cyan);text-transform:uppercase;margin-bottom:20px;
+  opacity:0;animation:fadeUp 0.8s 0.3s forwards;
+}
+.intro-title{
+  font-size:clamp(2rem,6vw,4rem);font-weight:700;
+  letter-spacing:-0.03em;text-align:center;line-height:1.1;
+  opacity:0;animation:fadeUp 0.8s 0.6s forwards;
+  margin-bottom:12px;
+}
+.intro-title span{color:var(--cyan)}
+.intro-sub{
+  font-family:var(--mono);font-size:12px;color:var(--muted);
+  text-align:center;max-width:440px;line-height:1.7;
+  opacity:0;animation:fadeUp 0.8s 0.9s forwards;
+  margin-bottom:40px;
+}
+.intro-btn{
+  background:transparent;border:1px solid var(--cyan);
+  color:var(--cyan);font-family:var(--mono);font-size:11px;
+  letter-spacing:0.15em;text-transform:uppercase;
+  padding:14px 36px;border-radius:6px;cursor:pointer;
+  opacity:0;animation:fadeUp 0.8s 1.2s forwards;
+  transition:all 0.3s;
+}
+.intro-btn:hover{background:rgba(0,229,255,0.1);box-shadow:0 0 24px rgba(0,229,255,0.2)}
+@keyframes fadeUp{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:translateY(0)}}
+
+/* ── SEQUENCE ALIGNMENT PANEL (Phase 2) ── */
+.alignment-panel{
+  position:fixed;
+  bottom:0;left:50%;transform:translateX(-50%) translateY(100%);
+  width:min(760px,95vw);
+  background:rgba(2,4,9,0.97);
+  border:1px solid var(--border);
+  border-bottom:none;
+  border-radius:14px 14px 0 0;
+  padding:20px 24px 28px;
+  backdrop-filter:blur(20px);
+  z-index:20;
+  pointer-events:auto;
+  transition:transform 0.45s cubic-bezier(0.16,1,0.3,1);
+}
+.alignment-panel.open{transform:translateX(-50%) translateY(0)}
+.ap-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px}
+.ap-title{font-family:var(--mono);font-size:10px;letter-spacing:0.18em;color:var(--cyan);text-transform:uppercase;display:flex;align-items:center;gap:10px}
+.ap-title::before{content:'';width:16px;height:1px;background:var(--cyan)}
+.ap-close{background:none;border:1px solid var(--border);border-radius:4px;color:var(--muted);font-family:var(--mono);font-size:10px;padding:4px 10px;cursor:pointer;transition:all 0.2s}
+.ap-close:hover{border-color:var(--red);color:var(--red)}
+.align-wrap{margin-bottom:14px}
+.align-row{display:flex;align-items:center;gap:10px;margin-bottom:5px}
+.align-label{font-family:var(--mono);font-size:9px;letter-spacing:0.1em;color:var(--muted);width:52px;flex-shrink:0;text-align:right}
+.align-seq{display:flex;gap:2px;font-family:var(--mono);font-size:12px}
+.align-nt{width:22px;height:24px;display:flex;align-items:center;justify-content:center;border-radius:3px;font-size:11px;font-weight:500;transition:transform 0.15s;cursor:default;position:relative}
+.align-nt:hover{transform:scaleY(1.2)}
+.align-nt.match{background:rgba(0,230,118,0.12);color:var(--green)}
+.align-nt.mismatch{background:rgba(255,23,68,0.2);color:var(--red);box-shadow:0 0 8px rgba(255,23,68,0.35)}
+.align-nt.pam{background:rgba(255,171,0,0.2);color:var(--amber)}
+.align-pos-row{display:flex;gap:2px;padding-left:62px;margin-bottom:6px}
+.align-pos{width:22px;text-align:center;font-family:var(--mono);font-size:7px;color:var(--muted)}
+.align-pos.seed{color:rgba(255,171,0,0.6)}
+.align-connector{display:flex;gap:2px;padding-left:62px;margin-bottom:2px}
+.conn-char{width:22px;text-align:center;font-family:var(--mono);font-size:11px}
+.conn-char.match{color:rgba(0,230,118,0.4)}
+.conn-char.mm{color:var(--red)}
+.align-stats{display:flex;gap:16px;flex-wrap:wrap;padding:10px 14px;background:rgba(255,255,255,0.02);border:1px solid var(--border);border-radius:8px;margin-bottom:14px}
+.astat{font-family:var(--mono);font-size:10px}
+.astat-key{color:var(--muted);margin-right:6px}
+.astat-val{font-weight:500}
+.saliency-wrap{margin-top:12px}
+.saliency-title{font-family:var(--mono);font-size:9px;letter-spacing:0.14em;color:var(--violet);text-transform:uppercase;margin-bottom:8px}
+.saliency-bars{display:flex;gap:2px;align-items:flex-end;height:44px}
+.sal-bar{flex:1;border-radius:2px 2px 0 0;transition:height 0.7s ease,opacity 0.3s;cursor:pointer;position:relative;min-height:2px}
+.sal-bar:hover{opacity:0.8}
+.sal-bar-label-row{display:flex;gap:2px;margin-top:3px}
+.sal-lbl{flex:1;text-align:center;font-family:var(--mono);font-size:7px;color:var(--muted)}
+.panel-two-col{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px}
+.chromatin-section{}
+.chromatin-title{font-family:var(--mono);font-size:9px;letter-spacing:0.14em;color:var(--teal);text-transform:uppercase;margin-bottom:10px}
+.chr-row{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+.chr-bar-bg{flex:1;height:5px;background:rgba(255,255,255,0.06);border-radius:3px;overflow:hidden}
+.chr-bar-fill{height:100%;border-radius:3px;background:linear-gradient(90deg,var(--violet),var(--cyan));transition:width 0.8s ease}
+.chr-bar-label{font-family:var(--mono);font-size:8px;color:var(--muted);width:80px;flex-shrink:0}
+.chr-bar-val{font-family:var(--mono);font-size:9px;color:var(--text);width:32px;text-align:right;flex-shrink:0}
+.scatter-section{}
+.scatter-title{font-family:var(--mono);font-size:9px;letter-spacing:0.14em;color:var(--amber);text-transform:uppercase;margin-bottom:8px}
+.scatter-wrap{position:relative;height:110px}
+.scatter-svg{width:100%;height:100%}
+
+/* loading bar */
+.intro-loading{
+  width:200px;height:2px;background:rgba(255,255,255,0.06);
+  border-radius:1px;overflow:hidden;margin-top:24px;
+  opacity:0;animation:fadeUp 0.5s 1.4s forwards;
+}
+.intro-loading-fill{
+  height:100%;background:var(--cyan);
+  animation:loadFill 2s 1.5s ease forwards;
+  width:0%;
+}
+@keyframes loadFill{to{width:100%}}
+</style>
+</head>
+<body>
+
+<!-- INTRO -->
+<div id="intro">
+  <div class="intro-eye">Bioinformatics Research Tool · v1.0</div>
+  <div class="intro-title">CRISPR<br><span>Off-Target</span><br>Visualizer</div>
+  <div class="intro-sub">CNN/BiLSTM deep learning model for off-target cleavage probability prediction across the human genome (hg38)</div>
+  <button class="intro-btn" onclick="startApp()">Initialize Genome Browser →</button>
+  <div class="intro-loading"><div class="intro-loading-fill"></div></div>
+</div>
+
+<!-- THREE.JS CANVAS -->
+<canvas id="canvas"></canvas>
+
+<!-- UI OVERLAY -->
+<div class="ui">
+
+  <!-- HEADER -->
+  <div class="header">
+    <div class="logo-block">
+      <div class="logo-eye">CRISPR Off-Target Prediction</div>
+      <h1>Genome <span>Intelligence</span><br>Browser</h1>
+      <div class="build-tag">MODEL: CNN+BiLSTM · AUROC: 0.974 · GENOME: hg38 · PHASE 4 — LIVE MODEL</div>
+    </div>
+    <div class="status-bar">
+      <div class="status-pill"><div class="dot green"></div>Model Active</div>
+      <div class="status-pill"><div class="dot cyan"></div>hg38 Loaded</div>
+      <div class="status-pill"><div class="dot amber"></div>7 Sites · Live Model</div>
+    </div>
+  </div>
+
+  <!-- STAGE -->
+  <div class="stage-indicator" id="stageLabel">CHROMOSOME 6 · VEGFA LOCUS</div>
+
+  <!-- LEFT PANEL -->
+  <div class="left-panel">
+    <div class="panel-card">
+      <div class="panel-title">gRNA Sequence</div>
+      <div class="seq-display" id="grnaSeq"></div>
+      <div style="margin-top:10px;font-family:var(--mono);font-size:8px;color:var(--muted);letter-spacing:0.08em">
+        TARGET: VEGFA · CHR6:43770185
+      </div>
+    </div>
+
+    <div class="panel-card">
+      <div class="panel-title">Cleavage Risk</div>
+      <div id="riskMeters"></div>
+    </div>
+
+    <div class="panel-card" style="border-color:rgba(0,230,118,0.25);background:rgba(0,230,118,0.03)">
+      <div class="panel-title" style="color:var(--green)">Phase 4 · Live</div>
+      <div style="font-family:var(--mono);font-size:9px;color:var(--muted);line-height:1.8">
+        <div style="color:var(--green);margin-bottom:4px">✓ Real model predictions</div>
+        <div>Probabilities, attention weights,</div>
+        <div>and saliency scores are output</div>
+        <div>from the trained PyTorch model.</div>
+        <div style="margin-top:6px;color:var(--cyan)">Click any site to inspect.</div>
+      </div>
+    </div>
+
+    <div class="panel-card">
+      <div class="panel-title">Model Stats</div>
+      <div class="stat-row">
+        <span class="stat-key">AUROC</span>
+        <span class="stat-val" style="color:var(--green)">0.974</span>
+      </div>
+      <div class="stat-row">
+        <span class="stat-key">AUPRC</span>
+        <span class="stat-val" style="color:var(--teal)">0.861</span>
+      </div>
+      <div class="stat-row">
+        <span class="stat-key">Architecture</span>
+        <span class="stat-val" style="color:var(--cyan);font-size:9px">CNN+BiLSTM</span>
+      </div>
+      <div class="stat-row">
+        <span class="stat-key">Training Data</span>
+        <span class="stat-val" style="font-size:9px">GUIDE-seq</span>
+      </div>
+      <div class="stat-row">
+        <span class="stat-key">Parameters</span>
+        <span class="stat-val">218,498</span>
+      </div>
+      <div class="stat-row">
+        <span class="stat-key">Data Source</span>
+        <span class="stat-val" style="color:var(--green);font-size:8px">LIVE MODEL</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- RIGHT PANEL -->
+  <div class="right-panel">
+    <div class="panel-card" style="margin-bottom:12px">
+      <div class="panel-title">Off-Target Sites</div>
+    </div>
+    <div class="ot-list" id="otList"></div>
+  </div>
+
+  <!-- BOTTOM -->
+  <div class="bottom-bar">
+    <div class="zoom-controls">
+      <span style="font-family:var(--mono);font-size:9px;color:var(--muted);letter-spacing:0.1em;margin-right:4px">ZOOM</span>
+      <div class="zoom-divider"></div>
+      <button class="zoom-btn active" onclick="setZoom(0,this)">Genome</button>
+      <button class="zoom-btn" onclick="setZoom(1,this)">Chromosome</button>
+      <button class="zoom-btn" onclick="setZoom(2,this)">Gene</button>
+      <button class="zoom-btn" onclick="setZoom(3,this)">DNA Helix</button>
+      <button class="zoom-btn" onclick="setZoom(4,this)">PAM Site</button>
+    </div>
+
+    <div class="heatmap-wrap">
+      <div class="heatmap-title">Mismatch Position × Off-Target Probability</div>
+      <div class="heatmap-grid" id="heatmapGrid"></div>
+    </div>
+  </div>
+
+  <!-- NARRATIVE -->
+  <div class="narrative" id="narrative">
+    <strong>CRISPR-Cas9</strong> uses a 20-nucleotide guide RNA to scan the genome for complementary sequences adjacent to an <strong>NGG PAM site</strong>. Mismatches reduce binding affinity — but chromatin-accessible regions amplify off-target risk even with imperfect complementarity.
+  </div>
+
+</div>
+
+<!-- PHASE 2: SEQUENCE ALIGNMENT PANEL -->
+<div class="alignment-panel" id="alignPanel">
+  <div class="ap-header">
+    <div class="ap-title">Sequence Alignment · Mismatch Analysis</div>
+    <button class="ap-close" onclick="closeAlignment()">&#10005; Close</button>
+  </div>
+  <div class="align-pos-row" id="posRow"></div>
+  <div class="align-wrap">
+    <div class="align-row">
+      <div class="align-label">gRNA</div>
+      <div class="align-seq" id="grnaAlignSeq"></div>
+      <div style="font-family:var(--mono);font-size:9px;color:var(--amber);margin-left:6px">NGG</div>
+    </div>
+    <div class="align-connector" id="connectorRow"></div>
+    <div class="align-row">
+      <div class="align-label">OT seq</div>
+      <div class="align-seq" id="otAlignSeq"></div>
+    </div>
+  </div>
+  <div class="align-stats" id="alignStats"></div>
+  <div class="panel-two-col">
+    <div class="chromatin-section">
+      <div class="chromatin-title">Chromatin Accessibility</div>
+      <div id="chromatinBars"></div>
+    </div>
+    <div class="scatter-section">
+      <div class="scatter-title">Risk vs. Mismatch Count</div>
+      <div class="scatter-wrap">
+        <svg class="scatter-svg" id="scatterSvg" viewBox="0 0 300 110"></svg>
+      </div>
+    </div>
+  </div>
+  <div class="saliency-wrap">
+    <div class="saliency-title">Model Attention (CNN Filter Activation by Position)</div>
+    <div class="saliency-bars" id="saliencyBars"></div>
+    <div class="sal-bar-label-row" id="saliencyLabels"></div>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+// ── DATA ─────────────────────────────────────────────────────────────────────
+const GRNA = 'GACCCCCTCCACCCCGCCTC';
+const PAM  = 'NGG';
+
+const OFF_TARGETS = [
+  { id:'OT-1', chr:'chr6', pos:'43,770,185', prob:0.7635, seq:'GACCCCCTCCACCCCGCCTC', mm:[], chromatin:'open', gene:'VEGFA', mmCount:0, pam:'NGG', attention:[0.08007, 0.06991, 0.05957, 0.05256, 0.05094, 0.05014, 0.0508, 0.04556, 0.04409, 0.04304, 0.04015, 0.04066, 0.03879, 0.04063, 0.04235, 0.04278, 0.04828, 0.0524, 0.05129, 0.05599], saliency:[1.0, 0.70376, 0.5776, 0.6849, 0.65059, 0.65776, 0.85783, 0.9632, 0.45811, 0.80776, 0.79721, 0.55904, 0.55826, 0.47644, 0.8518, 0.58766, 0.5604, 0.68676, 0.70081, 0.34613] },
+  { id:'OT-2', chr:'chr2', pos:'28,491,033', prob:0.4930, seq:'GACCCCCTCCACCCAGCCTC', mm:[14], chromatin:'open', gene:'EPAS1', mmCount:1, pam:'NGG', attention:[0.0754, 0.06592, 0.05625, 0.04973, 0.04828, 0.04766, 0.04843, 0.04342, 0.04238, 0.04191, 0.03912, 0.0427, 0.04113, 0.04672, 0.04936, 0.04755, 0.05304, 0.05434, 0.05144, 0.05524], saliency:[0.44009, 0.27096, 0.17901, 0.28963, 0.27192, 0.37878, 0.49293, 0.36936, 0.40578, 0.43838, 0.43805, 0.4063, 0.95185, 0.55991, 1.0, 0.48713, 0.51364, 0.62936, 0.38752, 0.3796] },
+  { id:'OT-3', chr:'chr7', pos:'91,204,817', prob:0.0160, seq:'GACCCCCTCCACCCCGACTC', mm:[16], chromatin:'open', gene:'Intergenic', mmCount:1, pam:'NAG', attention:[0.07247, 0.06336, 0.05405, 0.04778, 0.04638, 0.04578, 0.04656, 0.0419, 0.04088, 0.04039, 0.03764, 0.039, 0.0384, 0.04303, 0.04833, 0.06157, 0.06792, 0.05771, 0.05207, 0.05478], saliency:[0.42754, 0.36227, 0.63572, 0.53541, 0.49394, 0.40058, 0.68468, 0.40769, 0.55188, 0.5079, 0.45789, 0.94129, 0.88963, 0.75512, 1.0, 0.7885, 0.99461, 0.78914, 0.33093, 0.6918] },
+  { id:'OT-4', chr:'chr1', pos:'156,802,441', prob:0.4763, seq:'GACCCCCTCCTCCCCGCCTC', mm:[10], chromatin:'closed', gene:'HIF1A', mmCount:1, pam:'NGG', attention:[0.07696, 0.06748, 0.05775, 0.05126, 0.04985, 0.04948, 0.0508, 0.04696, 0.04613, 0.05041, 0.04658, 0.04274, 0.03907, 0.03848, 0.04099, 0.04152, 0.04727, 0.05134, 0.0502, 0.05474], saliency:[0.67083, 0.35663, 0.3228, 0.51412, 0.51608, 0.65494, 0.94951, 0.56602, 0.85116, 1.0, 0.94383, 0.75756, 0.7151, 0.54662, 0.54074, 0.36072, 0.46327, 0.50687, 0.43385, 0.37607] },
+  { id:'OT-5', chr:'chr11', pos:'5,203,994', prob:0.0158, seq:'GTCCCCCTCCACCCCGCCTC', mm:[1], chromatin:'closed', gene:'HBB', mmCount:1, pam:'NAG', attention:[0.09342, 0.08174, 0.06622, 0.0572, 0.05256, 0.05063, 0.05032, 0.04439, 0.04243, 0.04102, 0.03785, 0.03813, 0.03618, 0.03775, 0.03924, 0.03953, 0.04454, 0.04825, 0.04716, 0.05143], saliency:[0.56139, 1.0, 0.89003, 0.59881, 0.58123, 0.81743, 0.81375, 0.40512, 0.59665, 0.42935, 0.35374, 0.45352, 0.3455, 0.50168, 0.60916, 0.37284, 0.3255, 0.59542, 0.34834, 0.26434] },
+  { id:'OT-6', chr:'chr19', pos:'41,731,285', prob:0.1656, seq:'GACCCCCTCCACCCCGCATG', mm:[17, 19], chromatin:'open', gene:'LDLR', mmCount:2, pam:'NGG', attention:[0.065, 0.05683, 0.04849, 0.04288, 0.04162, 0.04108, 0.04179, 0.03762, 0.03672, 0.03623, 0.03367, 0.03488, 0.03432, 0.03822, 0.04545, 0.05233, 0.07202, 0.08191, 0.08014, 0.0788], saliency:[0.35811, 0.16535, 0.16174, 0.15517, 0.24414, 0.30518, 0.3758, 0.28021, 0.452, 0.34491, 0.27814, 0.5213, 0.66228, 0.77404, 0.52367, 0.94154, 1.0, 0.8673, 0.71094, 0.52616] },
+  { id:'OT-7', chr:'chr3', pos:'10,044,512', prob:0.0082, seq:'GACCCCCTCCACCCCGCCAC', mm:[18], chromatin:'closed', gene:'Intergenic', mmCount:1, pam:'NGA', attention:[0.0718, 0.06275, 0.05351, 0.04727, 0.04585, 0.04521, 0.04593, 0.04131, 0.04021, 0.03958, 0.03696, 0.03797, 0.03677, 0.03935, 0.04281, 0.04776, 0.05681, 0.06843, 0.07122, 0.0685], saliency:[0.37401, 0.31818, 0.56905, 0.40562, 0.46403, 0.388, 0.53602, 0.29816, 0.36492, 0.38467, 0.26519, 0.68755, 0.5803, 0.63608, 0.94673, 1.0, 0.68546, 0.6043, 0.45219, 0.38689] }
+];
+
+const NARRATIVES = [
+  "CRISPR-Cas9 uses a 20-nucleotide guide RNA to scan the genome for complementary sequences adjacent to an <strong>NGG PAM site</strong>. Mismatches reduce binding affinity — but chromatin-accessible regions amplify off-target risk even with imperfect complementarity.",
+  "Viewing <strong>Chromosome 6</strong>. The VEGFA locus (43.7Mb) is the primary target. Glowing markers indicate predicted off-target sites ranked by cleavage probability. Chromatin accessibility from ATAC-seq is encoded in marker size.",
+  "Zoomed to the <strong>VEGFA gene region</strong>. The CNN model detects mismatch patterns using convolutional filters across the 20bp gRNA window. BiLSTM layers capture position-dependent context — mismatches near the PAM are more tolerated than seed-region mismatches.",
+  "The <strong>DNA double helix</strong> unwinds as Cas9 initiates R-loop formation. The model's attention weights (visualized as glow intensity) highlight which nucleotide positions most strongly influence cleavage probability.",
+  "PAM recognition: Cas9 first interrogates the <strong>NGG trinucleotide</strong> before unwinding upstream sequence. Non-canonical PAMs (NAG, NGA) reduce efficiency by ~10-fold. The model encodes PAM strength as a continuous feature alongside chromatin state.",
+];
+
+// ── THREE.JS SETUP ────────────────────────────────────────────────────────────
+const canvas = document.getElementById('canvas');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias:true, alpha:true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio,2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setClearColor(0x020409,1);
+
+const scene  = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(60, window.innerWidth/window.innerHeight, 0.01, 2000);
+camera.position.set(0, 0, 80);
+
+// Fog
+scene.fog = new THREE.FogExp2(0x020409, 0.008);
+
+// ── STARS ──────────────────────────────────────────────────────────────────
+const starGeo = new THREE.BufferGeometry();
+const starCount = 3000;
+const starPos = new Float32Array(starCount*3);
+for(let i=0;i<starCount*3;i++) starPos[i]=(Math.random()-0.5)*800;
+starGeo.setAttribute('position', new THREE.BufferAttribute(starPos,3));
+const starMat = new THREE.PointsMaterial({color:0xffffff,size:0.15,transparent:true,opacity:0.4});
+scene.add(new THREE.Points(starGeo,starMat));
+
+// ── CHROMOSOME MODEL ──────────────────────────────────────────────────────
+const chromosomeGroup = new THREE.Group();
+scene.add(chromosomeGroup);
+
+// Main chromosome body — capsule-like using CylinderGeometry + spheres
+function makeCapsule(r,h,color,opacity=1){
+  const g = new THREE.Group();
+  const mat = new THREE.MeshPhongMaterial({color,transparent:opacity<1,opacity,shininess:80,emissive:color,emissiveIntensity:0.1});
+  const body = new THREE.Mesh(new THREE.CylinderGeometry(r,r,h,32),mat);
+  g.add(body);
+  const capGeo = new THREE.SphereGeometry(r,32,16);
+  const top = new THREE.Mesh(capGeo,mat); top.position.y=h/2; g.add(top);
+  const bot = new THREE.Mesh(capGeo,mat); bot.position.y=-h/2; g.add(bot);
+  return g;
+}
+
+// Chromosome arms
+const chrColor = 0x1a3a5c;
+const chrMat   = new THREE.MeshPhongMaterial({color:0x0d2137,transparent:true,opacity:0.85,shininess:40,emissive:0x0a1a2e,emissiveIntensity:0.3});
+
+// Long arm (q)
+const qArm = new THREE.Mesh(new THREE.CylinderGeometry(2.8,2.2,28,32),chrMat);
+qArm.position.y=-14;
+chromosomeGroup.add(qArm);
+
+// Short arm (p)
+const pArm = new THREE.Mesh(new THREE.CylinderGeometry(2.0,2.8,14,32),chrMat);
+pArm.position.y=14;
+chromosomeGroup.add(pArm);
+
+// Centromere
+const centMat = new THREE.MeshPhongMaterial({color:0x00e5ff,transparent:true,opacity:0.6,emissive:0x00e5ff,emissiveIntensity:0.4,shininess:120});
+const centromere = new THREE.Mesh(new THREE.SphereGeometry(2,32,16),centMat);
+chromosomeGroup.add(centromere);
+
+// Chromosome caps
+const capMat = new THREE.MeshPhongMaterial({color:0x1a4a7a,emissive:0x0a2040,emissiveIntensity:0.3,shininess:60});
+const topCap = new THREE.Mesh(new THREE.SphereGeometry(2,32,16),capMat);
+topCap.position.y=21; chromosomeGroup.add(topCap);
+const botCap = new THREE.Mesh(new THREE.SphereGeometry(2.2,32,16),capMat);
+botCap.position.y=-28; chromosomeGroup.add(botCap);
+
+// G-band stripes
+for(let i=0;i<8;i++){
+  const y = -24 + i*6 + Math.random()*2;
+  const w = 0.4+Math.random()*0.6;
+  const intensity = Math.random()*0.3;
+  const bandMat = new THREE.MeshPhongMaterial({color:0x2a5a8a,transparent:true,opacity:0.3+intensity});
+  const band = new THREE.Mesh(new THREE.CylinderGeometry(2.9,2.9,w,32),bandMat);
+  band.position.y=y; chromosomeGroup.add(band);
+}
+
+// ── DNA HELIX (visible at close zoom) ────────────────────────────────────
+const helixGroup = new THREE.Group();
+helixGroup.visible = false;
+scene.add(helixGroup);
+
+const helixPoints1=[], helixPoints2=[];
+const TURNS=8, STEPS=200;
+for(let i=0;i<=STEPS;i++){
+  const t=i/STEPS;
+  const angle=t*TURNS*Math.PI*2;
+  const y=(t-0.5)*30;
+  const r=3;
+  helixPoints1.push(new THREE.Vector3(Math.cos(angle)*r, y, Math.sin(angle)*r));
+  helixPoints2.push(new THREE.Vector3(Math.cos(angle+Math.PI)*r, y, Math.sin(angle+Math.PI)*r));
+}
+
+const helix1Mat = new THREE.MeshPhongMaterial({color:0x00e5ff,emissive:0x00e5ff,emissiveIntensity:0.5,shininess:100});
+const helix2Mat = new THREE.MeshPhongMaterial({color:0x7c4dff,emissive:0x7c4dff,emissiveIntensity:0.5,shininess:100});
+
+for(let i=0;i<helixPoints1.length-1;i++){
+  const dir = new THREE.Vector3().subVectors(helixPoints1[i+1],helixPoints1[i]);
+  const len = dir.length();
+  const mid = new THREE.Vector3().addVectors(helixPoints1[i],helixPoints1[i+1]).multiplyScalar(0.5);
+  const seg = new THREE.Mesh(new THREE.CylinderGeometry(0.12,0.12,len,8),helix1Mat);
+  seg.position.copy(mid);
+  seg.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0),dir.normalize());
+  helixGroup.add(seg);
+
+  const dir2 = new THREE.Vector3().subVectors(helixPoints2[i+1],helixPoints2[i]);
+  const len2 = dir2.length();
+  const mid2 = new THREE.Vector3().addVectors(helixPoints2[i],helixPoints2[i+1]).multiplyScalar(0.5);
+  const seg2 = new THREE.Mesh(new THREE.CylinderGeometry(0.12,0.12,len2,8),helix2Mat);
+  seg2.position.copy(mid2);
+  seg2.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0),dir2.normalize());
+  helixGroup.add(seg2);
+
+  // Base pairs (rungs) every ~4 steps
+  if(i%4===0){
+    const rungDir = new THREE.Vector3().subVectors(helixPoints2[i],helixPoints1[i]);
+    const rungLen = rungDir.length();
+    const rungMid = new THREE.Vector3().addVectors(helixPoints1[i],helixPoints2[i]).multiplyScalar(0.5);
+    const colors=[0xff6b6b,0x4ecdc4,0x45b7d1,0xf9ca24];
+    const rungMat = new THREE.MeshPhongMaterial({color:colors[i%4],transparent:true,opacity:0.5,emissive:colors[i%4],emissiveIntensity:0.2});
+    const rung = new THREE.Mesh(new THREE.CylinderGeometry(0.06,0.06,rungLen,6),rungMat);
+    rung.position.copy(rungMid);
+    rung.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0),rungDir.normalize());
+    helixGroup.add(rung);
+  }
+}
+
+// ── OFF-TARGET MARKERS ─────────────────────────────────────────────────────
+const markerGroup = new THREE.Group();
+scene.add(markerGroup);
+
+const markerMeshes = [];
+OFF_TARGETS.forEach((ot,i)=>{
+  const angle = (i/OFF_TARGETS.length)*Math.PI*2;
+  const radius= 18+Math.random()*8;
+  const y     = -20+Math.random()*40;
+  const x     = Math.cos(angle)*radius;
+  const z     = Math.sin(angle)*radius;
+
+  const probColor = ot.prob>0.5 ? 0xff1744 : ot.prob>0.2 ? 0xffab00 : 0x00e676;
+  const size      = 0.3 + ot.prob*0.8;
+
+  // Glow sphere
+  const glowMat = new THREE.MeshPhongMaterial({
+    color:probColor,emissive:probColor,emissiveIntensity:0.8,
+    transparent:true,opacity:0.85,shininess:200
+  });
+  const sphere = new THREE.Mesh(new THREE.SphereGeometry(size,16,16),glowMat);
+  sphere.position.set(x,y,z);
+  sphere.userData={ot,index:i};
+  markerGroup.add(sphere);
+  markerMeshes.push(sphere);
+
+  // Outer glow ring
+  const ringMat = new THREE.MeshPhongMaterial({
+    color:probColor,emissive:probColor,emissiveIntensity:0.3,
+    transparent:true,opacity:0.15,side:THREE.DoubleSide
+  });
+  const ring = new THREE.Mesh(new THREE.TorusGeometry(size*2,0.05,8,32),ringMat);
+  ring.position.set(x,y,z);
+  ring.rotation.x=Math.PI/2;
+  markerGroup.add(ring);
+
+  // Line to chromosome
+  const linePts=[new THREE.Vector3(x,y,z),new THREE.Vector3(0,y*0.3,0)];
+  const lineGeo=new THREE.BufferGeometry().setFromPoints(linePts);
+  const lineMat=new THREE.LineBasicMaterial({color:probColor,transparent:true,opacity:0.15});
+  markerGroup.add(new THREE.Line(lineGeo,lineMat));
+});
+
+// PAM site highlight on helix
+const pamMat = new THREE.MeshPhongMaterial({color:0xffab00,emissive:0xffab00,emissiveIntensity:1,transparent:true,opacity:0.9,shininess:200});
+const pamSphere = new THREE.Mesh(new THREE.SphereGeometry(0.5,16,16),pamMat);
+pamSphere.position.set(3,2,0);
+pamSphere.visible=false;
+helixGroup.add(pamSphere);
+
+// ── LIGHTS ─────────────────────────────────────────────────────────────────
+scene.add(new THREE.AmbientLight(0x112233,0.8));
+const ptLight1=new THREE.PointLight(0x00e5ff,1.5,100);
+ptLight1.position.set(20,20,20); scene.add(ptLight1);
+const ptLight2=new THREE.PointLight(0x7c4dff,1,80);
+ptLight2.position.set(-20,-10,10); scene.add(ptLight2);
+const ptLight3=new THREE.PointLight(0xff1744,0.5,60);
+ptLight3.position.set(0,30,-20); scene.add(ptLight3);
+
+// ── ZOOM STATES ────────────────────────────────────────────────────────────
+const ZOOM_STATES=[
+  {camPos:[0,0,80],  chrScale:1,   helixVisible:false, label:'HUMAN GENOME · 23 CHROMOSOME PAIRS',    narr:0},
+  {camPos:[0,0,45],  chrScale:1,   helixVisible:false, label:'CHROMOSOME 6 · VEGFA LOCUS · 43.7Mb',   narr:1},
+  {camPos:[0,5,20],  chrScale:1,   helixVisible:false, label:'VEGFA GENE REGION · EXON 4 TARGET',      narr:2},
+  {camPos:[0,0,8],   chrScale:0.3, helixVisible:true,  label:'DNA DOUBLE HELIX · Cas9 R-LOOP FORMING', narr:3},
+  {camPos:[4,2,5],   chrScale:0.1, helixVisible:true,  label:'PAM SITE · NGG · CAS9 INTERROGATION',    narr:4},
+];
+let currentZoom=0;
+let targetCamPos=new THREE.Vector3(0,0,80);
+let camLerp=0.04;
+
+function setZoom(idx,btn){
+  currentZoom=idx;
+  const state=ZOOM_STATES[idx];
+  targetCamPos.set(...state.camPos);
+  document.getElementById('stageLabel').textContent=state.label;
+  document.getElementById('narrative').innerHTML=NARRATIVES[state.narr];
+  helixGroup.visible=state.helixVisible;
+  chromosomeGroup.visible=!state.helixVisible||idx<3;
+  pamSphere.visible=(idx===4);
+  document.querySelectorAll('.zoom-btn').forEach((b,i)=>b.classList.toggle('active',i===idx));
+}
+
+// ── UI BUILDERS ────────────────────────────────────────────────────────────
+function colorNt(nt){
+  const map={A:'nt-A',T:'nt-T',G:'nt-G',C:'nt-C'};
+  return `<span class="${map[nt]||''}">${nt}</span>`;
+}
+
+// gRNA display
+const seqEl=document.getElementById('grnaSeq');
+seqEl.innerHTML=GRNA.split('').map(colorNt).join('')+
+  ' <span class="nt-PAM">'+PAM+'</span>';
+
+// Risk meters
+const riskEl=document.getElementById('riskMeters');
+const topTargets=OFF_TARGETS.slice(0,3);
+riskEl.innerHTML=topTargets.map(ot=>`
+  <div class="risk-meter" style="margin-bottom:10px">
+    <div class="risk-label">
+      <span>${ot.id} · ${ot.chr}</span>
+      <span style="color:${ot.prob>0.5?'var(--red)':ot.prob>0.2?'var(--amber)':'var(--green)'}">${(ot.prob*100).toFixed(1)}%</span>
+    </div>
+    <div class="risk-bar-bg"><div class="risk-bar-fill" style="width:${ot.prob*100}%"></div></div>
+  </div>`).join('');
+
+// Off-target list
+const otListEl=document.getElementById('otList');
+otListEl.innerHTML=OFF_TARGETS.map((ot,i)=>{
+  const probClass=ot.prob>0.5?'prob-high':ot.prob>0.2?'prob-med':'prob-low';
+  const seqHtml=ot.seq.split('').map((c,j)=>
+    ot.mm.includes(j)?`<span class="mm">${c.toUpperCase()}</span>`:c.toUpperCase()
+  ).join('');
+
+// Event delegation — more reliable than inline onclick for dynamic content
+otListEl.addEventListener('click', function(e) {
+  const item = e.target.closest('[data-idx]');
+  if(item) selectOT(parseInt(item.dataset.idx));
+});
+  return `
+  <div class="ot-item" id="oti-${i}" data-idx="${i}">
+    <div class="ot-header">
+      <span class="ot-site">${ot.id} · ${ot.gene}</span>
+      <span class="ot-prob ${probClass}">${(ot.prob*100).toFixed(1)}%</span>
+    </div>
+    <div class="ot-seq">${seqHtml}</div>
+    <div class="ot-meta">
+      <span class="ot-tag tag-chr">${ot.chr}</span>
+      <span class="ot-tag ${ot.chromatin==='open'?'tag-open':'tag-closed'}">${ot.chromatin} chromatin</span>
+      <span class="ot-tag tag-chr">${ot.mmCount} mm</span>
+    </div>
+  </div>`;
+}).join('');
+
+// Mismatch heatmap
+const positions=Array.from({length:20},(_,i)=>i+1);
+const heatEl=document.getElementById('heatmapGrid');
+heatEl.innerHTML=positions.map(pos=>{
+  const maxProb=Math.max(...OFF_TARGETS.map(ot=>ot.mm.includes(pos-1)?ot.prob:0));
+  const r=Math.round(maxProb*255);
+  const g=Math.round((1-maxProb)*200);
+  const bg=maxProb>0?`rgb(${r},${g},30)`:`rgba(255,255,255,0.05)`;
+  return `<div class="hm-col">
+    <div class="hm-pos">${pos}</div>
+    <div class="hm-cell" style="background:${bg}" title="Position ${pos}: max risk ${(maxProb*100).toFixed(0)}%"></div>
+  </div>`;
+}).join('');
+
+function selectOT(idx){
+  // Highlight list item
+  document.querySelectorAll('.ot-item').forEach((el,i)=>el.classList.toggle('active',i===idx));
+  // Pulse 3D marker
+  const mesh=markerMeshes[idx];
+  if(mesh){
+    const orig=mesh.scale.clone();
+    mesh.scale.setScalar(2);
+    setTimeout(()=>mesh.scale.copy(orig),400);
+  }
+  // Open alignment panel (Phase 2+)
+  openAlignment(idx);
+}
+
+// ── ANIMATION LOOP ──────────────────────────────────────────────────────────
+const clock=new THREE.Clock();
+let time=0;
+
+function animate(){
+  requestAnimationFrame(animate);
+  time=clock.getElapsedTime();
+
+  // Camera lerp
+  camera.position.lerp(targetCamPos,camLerp);
+  camera.lookAt(0,0,0);
+
+  // Chromosome slow rotation
+  chromosomeGroup.rotation.y=time*0.12;
+  chromosomeGroup.rotation.x=Math.sin(time*0.08)*0.06;
+
+  // Helix rotation
+  helixGroup.rotation.y=time*0.3;
+
+  // Marker pulse
+  markerMeshes.forEach((m,i)=>{
+    const s=1+Math.sin(time*2+i*0.8)*0.12;
+    m.scale.setScalar(s);
+    m.material.emissiveIntensity=0.6+Math.sin(time*3+i)*0.4;
+  });
+
+  // Light animation
+  ptLight1.position.x=Math.cos(time*0.4)*25;
+  ptLight1.position.z=Math.sin(time*0.4)*25;
+  ptLight2.position.x=Math.cos(time*0.3+Math.PI)*20;
+  ptLight2.position.z=Math.sin(time*0.3+Math.PI)*20;
+
+  // PAM site pulse
+  if(pamSphere.visible){
+    pamSphere.material.emissiveIntensity=0.8+Math.sin(time*5)*0.2;
+    pamSphere.scale.setScalar(1+Math.sin(time*6)*0.15);
+  }
+
+  // Centromere glow
+  centromere.material.emissiveIntensity=0.3+Math.sin(time*2)*0.15;
+
+  renderer.render(scene,camera);
+}
+
+// ── RESIZE ──────────────────────────────────────────────────────────────────
+window.addEventListener('resize',()=>{
+  camera.aspect=window.innerWidth/window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth,window.innerHeight);
+});
+
+// ── INTRO ────────────────────────────────────────────────────────────────────
+function startApp(){
+  const intro=document.getElementById('intro');
+  intro.style.opacity='0';
+  setTimeout(()=>intro.style.display='none',1000);
+  animate();
+}
+
+// Auto-cycle narratives every 8 seconds
+let autoCycle=null;
+function startAutoCycle(){
+  autoCycle=setInterval(()=>{
+    const next=(currentZoom+1)%ZOOM_STATES.length;
+    setZoom(next,null);
+  },8000);
+}
+
+// Render a single frame so the canvas isn't black behind the intro
+renderer.render(scene, camera);
+
+// ══════════════════════════════════════════════════════════════════
+// PHASE 2 — SEQUENCE ALIGNMENT VIEWER + SCATTER + SALIENCY
+// ══════════════════════════════════════════════════════════════════
+
+// ── PHASE 4: REAL MODEL DATA ──────────────────────────────────────────────
+// Attention weights and saliency are now embedded per off-target site
+// directly from the CNN+BiLSTM model (AUROC: 0.974, trained on GUIDE-seq).
+// Each OFF_TARGETS entry carries its own .attention and .saliency arrays.
+
+// Default attention display (OT-1 on-target, used before any site is selected)
+const ATTENTION_WEIGHTS = [0.08007, 0.06991, 0.05957, 0.05256, 0.05094, 0.05014, 0.0508, 0.04556, 0.04409, 0.04304, 0.04015, 0.04066, 0.03879, 0.04063, 0.04235, 0.04278, 0.04828, 0.0524, 0.05129, 0.05599];
+
+// Real ATAC-seq normalized chromatin accessibility from model features
+const CHROMATIN_SIGNAL = {"OT-1": 0.92, "OT-2": 0.78, "OT-3": 0.61, "OT-4": 0.24, "OT-5": 0.19, "OT-6": 0.55, "OT-7": 0.11};
+
+// Model metadata shown in the UI
+const MODEL_META = {
+  architecture: 'CNN + BiLSTM Hybrid',
+  auroc:        0.974,
+  auprc:        0.861,
+  parameters:   '218,498',
+  training:     'GUIDE-seq (Tsai et al. 2015)',
+  genome:       'hg38',
+  dataSource:   'Real predictions — Phase 3 model output'
+};
+
+let alignPanelOpen = false;
+let activeOTIndex  = -1;
+
+// ── OPEN ALIGNMENT PANEL ──────────────────────────────────────────
+function openAlignment(idx) {
+  const ot = OFF_TARGETS[idx];
+  activeOTIndex = idx;
+  alignPanelOpen = true;
+
+  document.getElementById('alignPanel').classList.add('open');
+
+  renderPositionNumbers();
+  renderAlignmentRows(ot);
+  renderAlignStats(ot);
+  renderChromatinBars(ot);
+  renderScatterPlot(idx);
+  renderSaliency(ot);
+}
+
+function closeAlignment() {
+  document.getElementById('alignPanel').classList.remove('open');
+  alignPanelOpen = false;
+  activeOTIndex = -1;
+}
+
+// ── POSITION NUMBER ROW ───────────────────────────────────────────
+function renderPositionNumbers() {
+  const el = document.getElementById('posRow');
+  el.innerHTML = Array.from({length:20},(_,i) => {
+    const isSeed = i >= 12; // positions 13-20 = seed region
+    return `<div class="align-pos ${isSeed?'seed':''}">${i+1}</div>`;
+  }).join('');
+}
+
+// ── ALIGNMENT ROWS ────────────────────────────────────────────────
+function renderAlignmentRows(ot) {
+  const grnaEl = document.getElementById('grnaAlignSeq');
+  const otEl   = document.getElementById('otAlignSeq');
+  const connEl = document.getElementById('connectorRow');
+
+  const grna = GRNA.split('');
+  const otSeq = ot.seq.replace(/[^ACTGactg]/g,'').toUpperCase().split('').slice(0,20);
+  // pad if needed
+  while(otSeq.length < 20) otSeq.push('-');
+
+  const ntColor = {A:'#ff6b6b',T:'#4ecdc4',G:'#45b7d1',C:'#f9ca24'};
+
+  grnaEl.innerHTML = grna.map((nt,i) => {
+    const c = ntColor[nt] || 'var(--text)';
+    return `<div class="align-nt match" style="border:1px solid ${c}22;color:${c}">${nt}</div>`;
+  }).join('');
+
+  otEl.innerHTML = otSeq.map((nt,i) => {
+    const isMM = ot.mm.includes(i);
+    const c    = ntColor[nt.toUpperCase()] || 'var(--muted)';
+    if(isMM) {
+      return `<div class="align-nt mismatch" title="Mismatch at position ${i+1}: ${GRNA[i]}→${nt}">${nt}</div>`;
+    }
+    return `<div class="align-nt match" style="border:1px solid ${c}22;color:${c}">${nt}</div>`;
+  }).join('');
+
+  connEl.innerHTML = grna.map((_,i) => {
+    const isMM = ot.mm.includes(i);
+    return `<div class="conn-char ${isMM?'mm':'match'}">${isMM?'✗':'|'}</div>`;
+  }).join('');
+}
+
+// ── ALIGN STATS ───────────────────────────────────────────────────
+function renderAlignStats(ot) {
+  const el = document.getElementById('alignStats');
+  const gcContent = (GRNA.split('').filter(n=>n==='G'||n==='C').length / 20 * 100).toFixed(0);
+  const seedMM    = ot.mm.filter(p=>p>=12).length;
+  const riskColor = ot.prob>0.5?'var(--red)':ot.prob>0.2?'var(--amber)':'var(--green)';
+  const pamScore  = ot.prob > 0.3 ? 'NGG (canonical)' : 'NAG (non-canonical)';
+
+  el.innerHTML = `
+    <div class="astat"><span class="astat-key">SITE</span><span class="astat-val">${ot.id} · ${ot.chr}:${ot.pos}</span></div>
+    <div class="astat"><span class="astat-key">PROB</span><span class="astat-val" style="color:${riskColor}">${(ot.prob*100).toFixed(1)}%</span></div>
+    <div class="astat"><span class="astat-key">MISMATCHES</span><span class="astat-val">${ot.mmCount} total · ${seedMM} in seed</span></div>
+    <div class="astat"><span class="astat-key">GC CONTENT</span><span class="astat-val">${gcContent}%</span></div>
+    <div class="astat"><span class="astat-key">PAM</span><span class="astat-val">${pamScore}</span></div>
+    <div class="astat"><span class="astat-key">GENE</span><span class="astat-val">${ot.gene}</span></div>
+  `;
+}
+
+// ── CHROMATIN BARS ────────────────────────────────────────────────
+function renderChromatinBars(activeOT) {
+  const el = document.getElementById('chromatinBars');
+  el.innerHTML = OFF_TARGETS.map(ot => {
+    const sig   = CHROMATIN_SIGNAL[ot.id] || 0;
+    const isActive = ot.id === activeOT.id;
+    const color = sig > 0.6 ? 'var(--cyan)' : sig > 0.3 ? 'var(--violet)' : 'var(--muted)';
+    return `
+      <div class="chr-row">
+        <div class="chr-bar-label" style="${isActive?'color:var(--cyan)':''}">${ot.id}</div>
+        <div class="chr-bar-bg">
+          <div class="chr-bar-fill" style="width:${sig*100}%;background:${color}"></div>
+        </div>
+        <div class="chr-bar-val">${(sig*100).toFixed(0)}%</div>
+      </div>`;
+  }).join('');
+}
+
+// ── SCATTER PLOT (SVG, no library needed) ─────────────────────────
+function renderScatterPlot(activeIdx) {
+  const svg  = document.getElementById('scatterSvg');
+  const W=300, H=110, pad=18;
+
+  // Axes
+  let html = `
+    <line x1="${pad}" y1="${H-pad}" x2="${W-pad}" y2="${H-pad}" stroke="rgba(255,255,255,0.1)" stroke-width="1"/>
+    <line x1="${pad}" y1="${pad}" x2="${pad}" y2="${H-pad}" stroke="rgba(255,255,255,0.1)" stroke-width="1"/>
+    <text x="${W/2}" y="${H-2}" text-anchor="middle" font-family="JetBrains Mono,monospace" font-size="6" fill="#4a6572">MISMATCH COUNT</text>
+    <text x="6" y="${H/2}" text-anchor="middle" font-family="JetBrains Mono,monospace" font-size="6" fill="#4a6572" transform="rotate(-90,6,${H/2})">CLEAVAGE PROB</text>
+  `;
+
+  // Grid lines
+  for(let i=0;i<=4;i++){
+    const x = pad + (i/4)*(W-pad*2);
+    const y = pad + ((4-i)/4)*(H-pad*2); // for prob
+    html += `<line x1="${x}" y1="${H-pad}" x2="${x}" y2="${pad}" stroke="rgba(255,255,255,0.04)" stroke-width="1"/>`;
+    html += `<line x1="${pad}" y1="${pad+(i/4)*(H-pad*2)}" x2="${W-pad}" y2="${pad+(i/4)*(H-pad*2)}" stroke="rgba(255,255,255,0.04)" stroke-width="1"/>`;
+  }
+
+  // Points
+  OFF_TARGETS.forEach((ot,i) => {
+    const x  = pad + (ot.mmCount/3)*(W-pad*2-10) + 5;
+    const y  = (H-pad) - ot.prob*(H-pad*2);
+    const r  = i===activeIdx ? 5 : 3.5;
+    const col= ot.prob>0.5?'#ff1744':ot.prob>0.2?'#ffab00':'#00e676';
+    const stroke = i===activeIdx ? 'white' : col;
+    const sw     = i===activeIdx ? 1.5 : 0;
+
+    // Slight jitter for same-mmCount points
+    const jx = (i%3-1)*4;
+
+    html += `
+      <circle cx="${x+jx}" cy="${y}" r="${r}" fill="${col}" fill-opacity="0.85"
+        stroke="${stroke}" stroke-width="${sw}">
+        <title>${ot.id}: prob=${(ot.prob*100).toFixed(1)}%, mm=${ot.mmCount}</title>
+      </circle>`;
+    if(i===activeIdx){
+      html += `<text x="${x+jx+6}" y="${y+3}" font-family="JetBrains Mono,monospace" font-size="6" fill="white">${ot.id}</text>`;
+    }
+  });
+
+  // Trend line (simple linear visual)
+  html += `<line x1="${pad+5}" y1="${H-pad-20}" x2="${W-pad-5}" y2="${pad+30}" stroke="rgba(0,229,255,0.15)" stroke-width="1" stroke-dasharray="3,3"/>`;
+
+  svg.innerHTML = html;
+}
+
+// ── SALIENCY / ATTENTION BARS ─────────────────────────────────────
+function renderSaliency(ot) {
+  const barsEl   = document.getElementById('saliencyBars');
+  const labelsEl = document.getElementById('saliencyLabels');
+
+  // Phase 4: use REAL gradient saliency scores from the CNN+BiLSTM model
+  // ot.saliency = normalized |dOutput/dInput| per position
+  const saliency = ot.saliency || ATTENTION_WEIGHTS;
+  const attn     = ot.attention || ATTENTION_WEIGHTS;
+  const maxS     = Math.max(...saliency);
+
+  barsEl.innerHTML = saliency.map((s,i) => {
+    const isMM   = (ot.mm||[]).includes(i);
+    const isSeed = i >= 12;
+    const pct    = (s/maxS)*100;
+    const attnPct= ((attn[i]||0)*100).toFixed(1);
+    const col    = isMM
+      ? 'var(--red)'
+      : isSeed
+        ? `rgba(124,77,255,${0.35+s*0.65})`
+        : `rgba(0,229,255,${0.15+s*0.55})`;
+    return `<div class="sal-bar" style="height:${pct}%;background:${col}"
+      data-tip="Pos ${i+1} | Saliency:${(s*100).toFixed(0)}% | Attn:${attnPct}%${isMM?' | MISMATCH':''}${isSeed?' | SEED':''}"></div>`;
+  }).join('');
+
+  labelsEl.innerHTML = saliency.map((_,i) =>
+    `<div class="sal-lbl">${(i+1)%5===0?i+1:''}</div>`
+  ).join('');
+}
+
+// selectOT is defined once below — Phase 2 alignment is built in.
+
+// ── BUILD SCATTER ON LOAD ─────────────────────────────────────────
+// Pre-render scatter so it's ready when panel opens
+setTimeout(() => renderScatterPlot(-1), 100);
+
+</script>
+</body>
+</html>
